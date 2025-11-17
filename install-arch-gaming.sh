@@ -2,6 +2,7 @@
 #
 # Arch Linux Gaming Setup Script for AMD (Radeon RX 7800 XT)
 # Installs drivers, Gamescope, MangoHud, Wine, Lutris, Bottles, and Heroic Launcher.
+# NOTE: Uses proton-ge-custom-bin for faster installation.
 
 echo "--- Starting Arch Gaming Environment Setup ---"
 echo ""
@@ -67,9 +68,9 @@ PACMAN_PACKAGES=(
     lutris
 )
 
-# AUR Packages (GE Proton, Heroic)
+# AUR Packages (GE Proton Binary, Heroic)
 AUR_PACKAGES=(
-    proton-ge-custom          # The GloriousEggroll version of Proton
+    proton-ge-custom-bin      # The GloriousEggroll version of Proton (Binary)
     heroic-games-launcher-bin # Binary package for Heroic
 )
 
@@ -110,7 +111,7 @@ echo "📊 **MangoHud Usage:**"
 echo "   You can prepend the command to any game launch: \`mangohud /path/to/game\`"
 echo "   Or, configure it in Lutris/Bottles to run automatically."
 
-echo "💾 **Proton-GE:**"
-echo "   It's installed! You may need to manually select 'Proton-GE' as the Wine/Proton version in Steam, Lutris, or Bottles."
+echo "💾 **Proton-GE-Bin:**"
+echo "   This is the faster-installing binary version. You will likely need to select 'Proton-GE' as the Wine/Proton version in Steam, Lutris, or Bottles."
 
 echo "Enjoy your new Arch gaming machine!"
