@@ -12,9 +12,6 @@ echo "--------------------------------------------------------"
 echo "Searching for executable *$SCRIPT_EXTENSION files in the current directory..."
 
 # 1. Find target scripts
-# Find all files ending in .sh, filter out this script, and ensure they are executable.
-# The `ls -F` trick lists files with trailing slashes for directories, which we exclude.
-# We then check executability and sort the results.
 TARGET_SCRIPTS=()
 for file in *${SCRIPT_EXTENSION}; do
     # Check if the file is a regular file, exists, and is executable
@@ -43,6 +40,7 @@ echo "--------------------------------------------------------"
 # 2. Run scripts sequentially
 SUCCESS_COUNT=0
 FAILURE_COUNT=0
+FAILED_SCRIPTS=() # Array to store names of failed scripts
 
 for script_name in "${TARGET_SCRIPTS[@]}"; do
 
@@ -56,6 +54,7 @@ for script_name in "${TARGET_SCRIPTS[@]}"; do
         EXIT_CODE=$?
         echo "❌ FAILURE: $script_name failed with exit code $EXIT_CODE."
         FAILURE_COUNT=$((FAILURE_COUNT + 1))
+        FAILED_SCRIPTS+=("$script_name") # Record the failed script name
         echo "--- Continuing to the next script ---"
     fi
     echo "" # Newline for separation
@@ -70,7 +69,13 @@ echo "Successful scripts: $SUCCESS_COUNT"
 echo "Failed scripts: $FAILURE_COUNT"
 
 if [ $FAILURE_COUNT -gt 0 ]; then
-    echo "⚠️ One or more scripts failed. Review the output above for details."
+    echo ""
+    echo "🚨 **FAILED SCRIPTS:**"
+    for failed in "${FAILED_SCRIPTS[@]}"; do
+        echo "   - $failed"
+    done
+    echo ""
+    echo "⚠️ One or more scripts failed. Review the output above for specific errors."
 else
     echo "🎉 All scripts executed successfully!"
 fi
