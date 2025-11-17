@@ -2,9 +2,9 @@
 #
 # Snapper Setup Script for Arch Linux (Auto-Detects Bootloader and Init System)
 #
-# This script performs core Snapper/Snap-pac setup as root, then drops privileges
-# to install 'snapper-tools' from the AUR as a required post-step.
-# It now preserves an existing 'root' snapper configuration if one is found.
+# FULLY IDEMPOTENT: Ensures safe re-runs by checking for existing files,
+# Btrfs subvolumes, and configuration settings before making changes.
+#
 
 # --- Configuration Variables ---
 ROOT_CONFIG_NAME="root"
@@ -21,8 +21,8 @@ echo "========================================================"
 
 # Check for root permissions
 if [ "$EUID" -ne 0 ]; then
-  echo "❌ This script must be run with root privileges (sudo)."
-  exit 1
+    echo "❌ This script must be run with root privileges (sudo)."
+    exit 1
 fi
 
 # Determine the user who invoked sudo for later privilege dropping
@@ -33,7 +33,7 @@ if [ -z "$NON_ROOT_USER" ]; then
 fi
 echo "✅ Original user detected: $NON_ROOT_USER. Will use this user for AUR installation."
 
-# 1. Init System Detection Function
+# 1. Init System Detection Function (Idempotent by nature)
 detect_init_system() {
     echo "➡️ Checking for systemd init system..."
     if [ -d "/run/systemd/system" ] && [ "$(readlink -f /sbin/init)" = "/usr/lib/systemd/systemd" ]; then
@@ -41,12 +41,12 @@ detect_init_system() {
         return 0
     else
         echo "❌ Error: systemd was not detected or is not the running init system."
-        echo "   Snapper relies on systemd timers/services for automation."
+        echo "    Snapper relies on systemd timers/services for automation."
         exit 1
     fi
 }
 
-# 2. Bootloader Detection Function
+# 2. Bootloader Detection Function (Idempotent by nature)
 detect_bootloader() {
     echo "➡️ Detecting active bootloader configuration..."
 
@@ -62,14 +62,14 @@ detect_bootloader() {
         echo "✅ Detected: Limine. Will install '$INTEGRATION_PACKAGE'."
     else
         echo "❌ Could not reliably detect GRUB or Limine configuration files."
-        echo "   Assuming default GRUB setup as a fallback."
+        echo "    Assuming default GRUB setup as a fallback."
         BOOTLOADER="GRUB"
         INTEGRATION_PACKAGE="grub-btrfs"
         DEPLOY_COMMAND="grub-mkconfig -o /boot/grub/grub.cfg"
     fi
 }
 
-# 3. AUR Package Installation Function (snapper-tools) - RUNS AS NON-ROOT USER
+# 3. AUR Package Installation Function (Idempotent via AUR helper flags)
 install_aur_package() {
     local package_name="snapper-tools"
     echo "--------------------------------------------------------"
@@ -77,25 +77,22 @@ install_aur_package() {
 
     local aur_command=""
     if command -v yay &> /dev/null; then
-        echo "   Using 'yay' to install $package_name (Running as user $NON_ROOT_USER)..."
-        # Using --needed for re-runs and --noconfirm for non-interactive
+        echo "    Using 'yay' to install $package_name (Running as user $NON_ROOT_USER)..."
         aur_command="yay -S --noconfirm --needed $package_name"
     elif command -v paru &> /dev/null; then
-        echo "   Using 'paru' to install $package_name (Running as user $NON_ROOT_USER)..."
-        # Using --batch and --skipreview for better non-interactive performance with paru
+        echo "    Using 'paru' to install $package_name (Running as user $NON_ROOT_USER)..."
         aur_command="paru -S --noconfirm --needed --batch --skipreview $package_name"
     else
         echo "⚠️ Warning: No AUR helper (yay or paru) detected on the system."
-        echo "   To get the full user experience, please manually install '$package_name' from the AUR later."
+        echo "    To get the full user experience, please manually install '$package_name' from the AUR later."
         echo "--------------------------------------------------------"
         return 1
     fi
 
     # Execute the AUR command as the unprivileged user
     if [ -n "$aur_command" ]; then
-        echo "   Executing command as user $NON_ROOT_USER: $aur_command"
+        echo "    Executing command as user $NON_ROOT_USER: $aur_command"
 
-        # The TTY/password error occurs because the AUR helper calls 'sudo' internally
         if ! su - "$NON_ROOT_USER" -c "$aur_command"; then
             echo "========================================================"
             echo "❌ AUR Helper Failure Detected (Common TTY/Password Error)"
@@ -105,10 +102,10 @@ install_aur_package() {
             echo "non-interactively via 'su' prevents the password prompt."
             echo ""
             echo "✅ **Core Snapper Setup is COMPLETE.**"
-            echo "   The utility package was the only step that failed."
-            echo "   Please install the utility manually by running this command as **$NON_ROOT_USER**:"
+            echo "    The utility package was the only step that failed."
+            echo "    Please install the utility manually by running this command as **$NON_ROOT_USER**:"
             echo ""
-            echo "   $aur_command"
+            echo "    $aur_command"
             echo "========================================================"
             return 1
         else
@@ -130,69 +127,115 @@ run_snapper_setup() {
     fi
     echo "✅ Btrfs filesystem confirmed."
 
-    # Package Installation (Official Repos)
+    # Package Installation (Official Repos) - Idempotent via pacman --needed
     echo "➡️ Installing Snapper, Btrfs tools, snap-pac, and the bootloader package ($INTEGRATION_PACKAGE)..."
     PACKAGES="snapper btrfs-progs snap-pac $INTEGRATION_PACKAGE"
 
-    if ! pacman -S --noconfirm $PACKAGES; then
+    if ! pacman -S --noconfirm --needed $PACKAGES; then
         echo "⚠️ Warning: Failed to install one or more required packages via pacman. Continuing with setup..."
     fi
     echo "✅ Required official packages installed (or attempted)."
+
+    # --- BTRFS .snapshots CONFLICT RESOLUTION (HIGHLY IDEMPOTENT) ---
+    echo "➡️ Pre-flight check: Ensuring /.snapshots is ready for Snapper..."
+
+    # 1. Check if a directory named .snapshots exists
+    if [ -d "/.snapshots" ]; then
+        # 2. Check if it is a Btrfs subvolume.
+        if ! btrfs subvolume list -t -o / | grep -q "/.snapshots$"; then
+            echo "⚠️ Conflict found: /.snapshots exists but is a regular directory (not a subvolume)."
+            echo "    Attempting to delete the empty directory..."
+
+            if rmdir "/.snapshots" 2>/dev/null; then
+                echo "✅ Conflicting directory /.snapshots removed."
+            else
+                echo "❌ Error: Could not remove conflicting /.snapshots directory. It may not be empty."
+                echo "    Please manually remove it and re-run the script."
+                exit 1 # Exit if the conflict cannot be resolved automatically
+            fi
+        else
+            echo "✅ /.snapshots is already a Btrfs subvolume. Proceeding."
+        fi
+    fi
+
+    # 3. Ensure the /.snapshots subvolume exists. (Creates if necessary)
+    if ! btrfs subvolume list -t -o / | grep -q "/.snapshots$"; then
+        echo "➡️ Creating missing Btrfs subvolume /.snapshots..."
+        if ! btrfs subvolume create /.snapshots; then
+            echo "❌ Fatal Error: Could not create Btrfs subvolume /.snapshots."
+            exit 1
+        fi
+        echo "✅ Btrfs subvolume /.snapshots created."
+    fi
+    # --- END BTRFS CONFLICT RESOLUTION ---
 
     # Create Snapper Configuration for Root (/)
     echo "➡️ Checking Snapper configuration for the root filesystem ('$ROOT_CONFIG_NAME')..."
     CONFIG_FILE="/etc/snapper/configs/$ROOT_CONFIG_NAME"
 
     if [ -f "$CONFIG_FILE" ]; then
-        echo "✅ Existing configuration found at $CONFIG_FILE. Skipping creation."
+        echo "✅ Existing configuration file found at $CONFIG_FILE. Skipping creation."
     else
-        echo "   No existing config found. Creating new configuration..."
+        echo "    No existing config file found. Creating new configuration..."
+
+        # Attempt to create config (may fail due to internal Btrfs metadata mismatch)
         if ! snapper -c "$ROOT_CONFIG_NAME" create-config "$BTRFS_ROOT"; then
-            echo "❌ Error: Failed to create Snapper configuration '$ROOT_CONFIG_NAME'."
-            exit 1
+            echo "⚠️ Warning: snapper create-config failed (likely 'config already exists' internal error)."
+
+            # If the command failed AND the file is still missing, we manually create a minimal config
+            if [ ! -f "$CONFIG_FILE" ]; then
+                echo "    Attempting to manually create minimal config file to resolve internal mismatch..."
+                # Minimal settings needed for Snapper to recognize the internal config
+                printf 'SUBVOLUME="/"\nFSTYPE="btrfs"\n' | tee "$CONFIG_FILE" > /dev/null
+                echo "✅ Minimal config file created."
+            else
+                echo "✅ Snapper configuration file created (check file contents)."
+            fi
+        else
+            echo "✅ Snapper configuration '$ROOT_CONFIG_NAME' created."
         fi
-        echo "✅ Snapper configuration '$ROOT_CONFIG_NAME' created."
     fi
 
-    # Configure Snapper Settings (Tweaks)
+    # Configure Snapper Settings (Tweaks) - IDEMPOTENT BY CHECKING DESIRED VALUE
     echo "➡️ Adjusting root config settings for better management..."
-    # Only apply sed if the original default value is found, preventing errors on subsequent runs or customized files.
 
-    if grep -q '^TIMELINE_LIMIT_MONTHLY="10"$' "$CONFIG_FILE"; then
-        sed -i 's/^TIMELINE_LIMIT_MONTHLY="10"$/TIMELINE_LIMIT_MONTHLY="3"/' "$CONFIG_FILE"
-        echo "   - Updated MONTHLY limit."
-    fi
+    # Helper function to set or replace a config line
+    set_config_value() {
+        local key="$1"
+        local value="$2"
+        local file="$3"
 
-    if grep -q '^TIMELINE_LIMIT_DAILY="10"$' "$CONFIG_FILE"; then
-        sed -i 's/^TIMELINE_LIMIT_DAILY="10"$/TIMELINE_LIMIT_DAILY="7"/' "$CONFIG_FILE"
-        echo "   - Updated DAILY limit."
-    fi
+        # If the desired value is not present, set it
+        if ! grep -q "^$key=\"$value\"$" "$file"; then
+            # Replace existing line or append if not found
+            if grep -q "^$key=" "$file"; then
+                # Replace existing line using sed
+                sed -i -e "/^$key=/c\\$key=\"$value\"" "$file"
+            else
+                # Append new line
+                echo "$key=\"$value\"" >> "$file"
+            fi
+            echo "    - Updated $key limit."
+        fi
+    }
 
-    if grep -q '^TIMELINE_LIMIT_HOURLY="10"$' "$CONFIG_FILE"; then
-        sed -i 's/^TIMELINE_LIMIT_HOURLY="10"$/TIMELINE_LIMIT_HOURLY="24"/' "$CONFIG_FILE"
-        echo "   - Updated HOURLY limit."
-    fi
+    set_config_value "TIMELINE_LIMIT_MONTHLY" "3" "$CONFIG_FILE"
+    set_config_value "TIMELINE_LIMIT_DAILY" "7" "$CONFIG_FILE"
+    set_config_value "TIMELINE_LIMIT_HOURLY" "24" "$CONFIG_FILE"
+    set_config_value "QGROUP" "" "$CONFIG_FILE"
 
-    if grep -q '^QGROUP=""$' "$CONFIG_FILE"; then
-        sed -i 's/^QGROUP=""$/QGROUP="none"/' "$CONFIG_FILE"
-        echo "   - Updated QGROUP setting."
-    fi
-    echo "   Cleanup settings adjusted based on existing values (or skipped if already modified)."
+    echo "    Cleanup settings adjusted (or confirmed) based on desired values."
 
-    # Create .snapshots subvolume and mount point (if not present)
-    echo "➡️ Ensuring the /.snapshots subvolume is set up..."
-    [ ! -d "/.snapshots" ] && mkdir -p "/.snapshots"
-
-    # Enable Timers for Automatic Snapshots
+    # Enable Timers for Automatic Snapshots - Idempotent via systemctl
     echo "➡️ Enabling systemd timers for automatic snapshots..."
     systemctl enable --now snapper-timeline.timer
     systemctl enable --now snapper-cleanup.timer
     echo "✅ Timeline and cleanup timers enabled and started."
 
-    # Update Bootloader Configuration for Snapshot Booting
+    # Update Bootloader Configuration for Snapshot Booting - Idempotent to run every time
     echo "➡️ Regenerating $BOOTLOADER configuration for snapshot booting..."
     if [ -n "$DEPLOY_COMMAND" ]; then
-        echo "   Executing: $DEPLOY_COMMAND"
+        echo "    Executing: $DEPLOY_COMMAND"
         if ! eval "$DEPLOY_COMMAND"; then
             echo "⚠️ Warning: Bootloader deployment command failed. Check if '$INTEGRATION_PACKAGE' is installed and configured correctly."
         fi
