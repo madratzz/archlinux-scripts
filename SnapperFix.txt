@@ -1,0 +1,31 @@
+
+sudo rm -rf /etc/snapper/configs/*
+
+sudo btrfs subvolume delete /.snapshots
+
+sudo snapper create-config /
+
+sudo snapper list-configs
+
+
+
+sudo sh -c 'cat << EOF > /etc/snapper/configs/root
+SUBVOLUME="/"
+FSTYPE="btrfs"
+ALLOW_USERS="madratzz"
+
+# Timeline cleanup settings (from the script)
+TIMELINE_CREATE="yes"
+TIMELINE_LIMIT_HOURLY="24"
+TIMELINE_LIMIT_DAILY="7"
+TIMELINE_LIMIT_MONTHLY="3"
+CLEANUP_ALGORITHMS="timeline"
+EOF'
+
+
+
+
+sudo snapper create --description "Initial Endevaour OS Installation"
+
+
+sudo grub-mkconfig -o /boot/grub/grub.cfg
